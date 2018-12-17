@@ -6,7 +6,6 @@ import sys
 import imageio
 import magic
 import skimage.color as color
-import skimage.transform as transform
 
 
 def main():
