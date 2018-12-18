@@ -51,8 +51,20 @@ class ImagenetDataset(data.Dataset):
 
     def __getitem__(self, idx):
         path = self.image_paths[idx]
+
         img = skimage.img_as_float32(imageio.imread(path))
+
+        while img.shape[0] > 1024 or img.shape[1] > 1024:
+            img = transform.rescale(img, 0.5, multichannel=True,
+                                    anti_aliasing=True)
+
+        if img.shape[0] % 2 != 0:
+            img = img[:-1, :, :]
+
+        if img.shape[1] % 2 != 0:
+            img = img[:, :-1, :]
+
         downscaled = transform.rescale(img, 0.5, multichannel=True,
                                        anti_aliasing=True)
 
-        return (F.to_tensor(downscaled), F.to_tensor(img))
+        return (F.to_tensor(downscaled).float(), F.to_tensor(img).float())
