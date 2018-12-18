@@ -38,35 +38,63 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class UpscaleModule(nn.Module):
-    __constants__ = ['conv']
+class ResnextModule(nn.Module):
+    def __init__(self, d_in, d_out, C=4):
+        super(ResnextModule, self).__init__()
 
-    def __init__(self, depths=[8, 16, 32]):
-        super(UpscaleModule, self).__init__()
+        self.conv1 = nn.Conv2d(d_in, d_out // 2, 1)
+        self.conv2 = nn.Conv2d(d_out // 2, d_out // 2, 3, padding=1, groups=C)
+        self.conv3 = nn.Conv2d(d_out // 2, d_out, 1)
 
-        assert(len(depths) >= 1)
-
-        self.conv = nn.ModuleList(itertools.chain(
-            [nn.Conv2d(3, depths[0], 3, padding=1)],
-            (nn.Conv2d(depths[i - 1], depths[i], 3, padding=1)
-             for i in range(1, len(depths)))
-        ))
-
-        self.output = nn.Conv2d(depths[-1], 3, 3, padding=1)
+        if d_in != d_out:
+            self.channel_matcher = nn.Conv2d(d_in, d_out, 1)
+        else:
+            self.channel_matcher = lambda x: x
 
     def forward(self, x):
-        x = self.upscale(x)
+        x = x.to(self.conv1.weight)
 
-        for z in self.conv:
-            x = F.leaky_relu(z(x))
+        z = F.leaky_relu(self.conv1(x))
+        z = F.leaky_relu(self.conv2(z))
+        z = self.conv3(z)
+
+        return F.leaky_relu(z + self.channel_matcher(x))
+
+
+class UpscaleModule(nn.Module):
+    def __init__(self, low_depths=[8, 16], high_depths=[8, 16], C=4):
+        super(UpscaleModule, self).__init__()
+
+        assert(len(low_depths) >= 1)
+        assert(len(high_depths) >= 1)
+
+        self.low_conv = nn.ModuleList(itertools.chain(
+            [ResnextModule(3, low_depths[0], C=C)],
+            (ResnextModule(low_depths[i - 1], low_depths[i], C=C)
+             for i in range(1, len(low_depths)))
+        ))
+
+        self.shuffle = nn.PixelShuffle(2)
+
+        self.high_conv = nn.ModuleList(itertools.chain(
+            [ResnextModule(low_depths[-1] // 4, high_depths[0], C=C)],
+            (ResnextModule(high_depths[i - 1], high_depths[i], C=C)
+             for i in range(1, len(high_depths)))
+        ))
+
+        self.output = nn.Conv2d(high_depths[-1], 3, 3, padding=1)
+
+    def forward(self, x):
+        x = x.to(self.output.weight)
+
+        for z in self.low_conv:
+            x = z(x)
+
+        x = self.shuffle(x)
+
+        for z in self.high_conv:
+            x = z(x)
 
         h = torch.tanh(self.output(x))  # in range [-1, 1]
 
         return h / 2.0 + 0.5  # transform to range [0, 1]
-
-    def upscale(self, x):
-        N, C, H, W = x.shape
-        upscaled = torch.zeros((N, C, H * 2, W * 2), dtype=torch.float32)
-        upscaled[:, :, ::2, ::2] = x
-
-        return upscaled
