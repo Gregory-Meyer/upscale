@@ -33,9 +33,9 @@
 
 import pathlib
 
-import imageio
-import skimage
-import skimage.transform as transform
+import numpy as np
+import PIL
+import skimage.util as util
 import torch.utils.data as data
 import torchvision.transforms.functional as F
 
@@ -52,19 +52,12 @@ class ImagenetDataset(data.Dataset):
     def __getitem__(self, idx):
         path = self.image_paths[idx]
 
-        img = skimage.img_as_float32(imageio.imread(path))
+        img = PIL.Image.open(str(path.resolve()))
 
-        while img.shape[0] > 1024 or img.shape[1] > 1024:
-            img = transform.rescale(img, 0.5, multichannel=True,
-                                    anti_aliasing=True)
+        downsampled_size = (img.size[0] // 2, img.size[1] // 2)
+        downsampled = img.resize(downsampled_size, PIL.Image.LANCZOS)
 
-        if img.shape[0] % 2 != 0:
-            img = img[:-1, :, :]
+        img = F.to_tensor(util.img_as_float32(np.array(img)))
+        downscaled = F.to_tensor(util.img_as_float32(np.array(downsampled)))
 
-        if img.shape[1] % 2 != 0:
-            img = img[:, :-1, :]
-
-        downscaled = transform.rescale(img, 0.5, multichannel=True,
-                                       anti_aliasing=True)
-
-        return (F.to_tensor(downscaled).float(), F.to_tensor(img).float())
+        return (downscaled, img)
