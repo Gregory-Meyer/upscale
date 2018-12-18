@@ -38,6 +38,7 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 import torch.optim as optim
+import torch.optim.lr_scheduler as lr_scheduler
 import torch.utils.data as data
 import tqdm
 
@@ -71,7 +72,7 @@ def train_epoch(model, train_loader, optimizer, criterion):
     for X, y in tqdm.tqdm(train_loader):
         optimizer.zero_grad()
 
-        y_hat = model(X)
+        y_hat = model(X).to(y)
         loss = criterion(y_hat, y)
         loss.backward()
         optimizer.step()
@@ -79,40 +80,45 @@ def train_epoch(model, train_loader, optimizer, criterion):
 
 def evaluate_epoch(model, val_loader, criterion):
     with torch.no_grad():
-        running_loss = []
+        running_loss = np.empty(len(val_loader), dtype=np.double)
 
-        for X, y in tqdm.tqdm(val_loader):
-            y_hat = model(X)
-            running_loss.append(criterion(y_hat, y).item())
+        for i, (X, y) in enumerate(tqdm.tqdm(val_loader)):
+            y_hat = model(X).to(y)
+            running_loss[i] = criterion(y_hat, y).item()
 
     return np.mean(running_loss)
 
 
 def main():
+    device = torch.device('cuda')
+    dtype = torch.float
+
     print('loading images')
 
     dataset = imagenet_dataset.ImagenetDataset('./processed/')
-    num_samples = min(len(dataset), 8192 * 5 // 4)
+    num_samples = len(dataset)
     num_train = num_samples * 4 // 5
 
     train_dataset = data.Subset(dataset, range(num_train))
     val_dataset = data.Subset(dataset, range(num_train, num_samples))
 
     train_loader = data.DataLoader(train_dataset, shuffle=True)
-    val_loader = data.DataLoader(val_dataset, shuffle=True)
+    val_loader = data.DataLoader(val_dataset)
 
-    model = upscale_module.UpscaleModule().float()
+    model = upscale_module.UpscaleModule().to(device, dtype)
     model.apply(init_weights)
 
-    criterion = nn.MSELoss()
-    optimizer = optim.SGD(model.parameters(), lr=0.001, weight_decay=0.001,
+    criterion = nn.SmoothL1Loss()
+    optimizer = optim.SGD(model.parameters(), lr=0.001, weight_decay=0.0001,
                           momentum=0.9)
+    scheduler = lr_scheduler.ReduceLROnPlateau(optimizer)
     start_epoch = 0
 
     try:
         checkpoint = torch.load('model.tar')
         model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
+        scheduler.load_state_dict(checkpoint['scheduler'])
         start_epoch = checkpoint['epoch']
 
         print('restored model from epoch {}'.format(start_epoch))
@@ -120,17 +126,20 @@ def main():
         print('couldn\'t restore model: {}'.format(e))
         pass
 
+    model = model.to(device, dtype)
+
     for epoch in range(start_epoch, 30):
-        print('training epoch {}'.format(epoch))
-
-        train_epoch(model, train_loader, optimizer, criterion)
-
         print('evaluating epoch {}'.format(epoch))
         loss = evaluate_epoch(model, val_loader, criterion)
+        scheduler.step(loss)
         print('epoch {} loss: {}'.format(epoch, loss))
 
-        torch.save({'epoch': epoch, 'model': model.state_dict(),
-                    'optimizer': optimizer.state_dict()},
+        print('training epoch {}'.format(epoch + 1))
+        train_epoch(model, train_loader, optimizer, criterion)
+
+        torch.save({'epoch': epoch + 1, 'model': model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict()},
                    'model.tar')
 
 
