@@ -46,12 +46,17 @@ def main():
     if len(sys.argv) < 2:
         sys.exit("missing image path!")
 
-    model = upscale_module.UpscaleModule().float()
+    device = torch.device('cpu')
+    dtype = torch.float
+
+    model = upscale_module.UpscaleModule()
     checkpoint = torch.load('model.tar')
     model.load_state_dict(checkpoint['model'])
+    model = model.to(device, dtype)
 
     with torch.no_grad():
-        X = F.to_tensor(skimage.img_as_float32(imageio.imread(sys.argv[1])))
+        X = F.to_tensor(skimage.img_as_float32(imageio.imread(sys.argv[1]))) \
+            .to(device, dtype)
         C, H, W = X.shape
         X = X.reshape(1, C, H, W)
         y = np.array(F.to_pil_image(model(X)[0, :, :, :]))
