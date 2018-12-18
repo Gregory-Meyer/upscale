@@ -34,12 +34,11 @@
 import itertools
 
 import torch
-import torch.jit as jit
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-class UpscaleModule(jit.ScriptModule):
+class UpscaleModule(nn.Module):
     __constants__ = ['conv']
 
     def __init__(self, depths=[8, 16, 32]):
@@ -55,22 +54,19 @@ class UpscaleModule(jit.ScriptModule):
 
         self.output = nn.Conv2d(depths[-1], 3, 3, padding=1)
 
-    @jit.script_method
     def forward(self, x):
         x = self.upscale(x)
 
         for z in self.conv:
-            x = F.relu(z(x))
+            x = F.leaky_relu(z(x))
 
-        return self.output(x)
+        h = torch.tanh(self.output(x))  # in range [-1, 1]
 
-    @jit.script_method
+        return h / 2.0 + 0.5  # transform to range [0, 1]
+
     def upscale(self, x):
         N, C, H, W = x.shape
         upscaled = torch.zeros((N, C, H * 2, W * 2), dtype=torch.float32)
-
-        for i in range(H):
-            for j in range(W):
-                upscaled[:, :, 2 * i, 2 * j] = x[:, :, i, j]
+        upscaled[:, :, ::2, ::2] = x
 
         return upscaled

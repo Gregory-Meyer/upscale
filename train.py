@@ -59,7 +59,11 @@ def load_urls(path, num_urls):
 
 def init_weights(m):
     if type(m) == nn.Conv2d:
-        init.kaiming_normal_(m.weight, nonlinearity='relu')
+        if m.weight.shape[0] == 3:
+            init.xavier_normal_(m.weight, gain=init.calculate_gain('tanh'))
+        else:
+            init.kaiming_normal_(m.weight, nonlinearity='leaky_relu')
+
         m.bias.data.fill_(0.0)
 
 
@@ -77,7 +81,7 @@ def evaluate_epoch(model, val_loader, criterion):
     with torch.no_grad():
         running_loss = []
 
-        for X, y in val_loader:
+        for X, y in tqdm.tqdm(val_loader):
             y_hat = model(X)
             running_loss.append(criterion(y_hat, y).item())
 
@@ -88,7 +92,7 @@ def main():
     print('loading images')
 
     dataset = imagenet_dataset.ImagenetDataset('./processed/')
-    num_samples = min(len(dataset), 8192)
+    num_samples = min(len(dataset), 8192 * 5 // 4)
     num_train = num_samples * 4 // 5
 
     train_dataset = data.Subset(dataset, range(num_train))
@@ -120,8 +124,9 @@ def main():
         print('training epoch {}'.format(epoch))
 
         train_epoch(model, train_loader, optimizer, criterion)
-        loss = evaluate_epoch(model, val_loader, criterion)
 
+        print('evaluating epoch {}'.format(epoch))
+        loss = evaluate_epoch(model, val_loader, criterion)
         print('epoch {} loss: {}'.format(epoch, loss))
 
         torch.save({'epoch': epoch, 'model': model.state_dict(),
