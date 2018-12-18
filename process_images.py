@@ -37,10 +37,11 @@ import sys
 import imageio
 import magic
 import skimage.color as color
+import skimage.transform as transform
 
 
 def main():
-    dirpath = pathlib.Path('./data/')
+    dirpath = pathlib.Path('./images/')
     to_copy = pathlib.Path('./processed/')
 
     if not to_copy.is_dir():
@@ -88,6 +89,10 @@ def main():
             pdb.set_trace()
 
             pass
+
+        while img.shape[0] > 1024 or img.shape[1] > 1024:
+            img = transform.rescale(img, 0.5, multichannel=True,
+                                    anti_aliasing=True)
 
         if img.shape[0] % 2 != 0:
             img = img[:-1, :, :]
