@@ -34,10 +34,20 @@
 import pathlib
 import sys
 
-import imageio
 import magic
-import skimage.color as color
-import skimage.transform as transform
+import numpy as np
+from PIL import Image
+
+
+def round_to_nearest(x):
+    sizes = np.array([64, 96, 128, 192, 256, 384, 512, 768, 1024],
+                     dtype=np.int_)
+    is_less = x <= sizes
+
+    if np.count_nonzero(is_less) == 0:
+        return sizes[-1]
+
+    return sizes[is_less][0]
 
 
 def main():
@@ -68,44 +78,45 @@ def main():
     i = 0
     for file in filter(is_valid, dirpath.iterdir()):
         try:
-            img = imageio.imread(str(file.resolve()))
-        except Exception as e:
-            print('skipping {}: {}'.format(file.name, e), file=sys.stderr)
+            img = Image.open(str(file.resolve()))
+            img = img.convert(mode='RGB')
 
-        if img.shape[0] < 32 or img.shape[1] < 32:
+            if img.height < 256 or img.width < 256:
+                raise Exception('shape {} too small'.format(img.size))
+
+        except Exception as e:
+            print('\033[0;31mskipping {}: {}\033[0m'.format(file.name, e),
+                  file=sys.stderr)
+
             continue
 
         transformed_path = to_copy / '{:0>6}.png'.format(i)
 
-        if len(img.shape) == 2:
-            img = color.gray2rgb(img)
-        elif len(img.shape) == 3 and img.shape[2] == 1:
-            img = color.gray2rgb(img[:, :, 0])
-        elif len(img.shape) == 3 and img.shape[2] == 4:
-            img = img[:, :, :3]
+        while img.height > 1024 or img.width > 1024:
+            img = img.resize(np.array(img.size) // 2, resample=Image.LANCZOS)
 
-        if len(img.shape) != 3 or (len(img.shape) == 3 and img.shape[2] != 3):
-            import pdb
-            pdb.set_trace()
+        if img.height % 2 != 0:
+            new_height = img.height - 1
+        else:
+            new_height = img.height
 
-            pass
+        if img.width % 2 != 0:
+            new_width = img.width - 1
+        else:
+            new_width = img.width
 
-        while img.shape[0] > 1024 or img.shape[1] > 1024:
-            img = transform.rescale(img, 0.5, multichannel=True,
-                                    anti_aliasing=True)
-
-        if img.shape[0] % 2 != 0:
-            img = img[:-1, :, :]
-
-        if img.shape[1] % 2 != 0:
-            img = img[:, :-1, :]
+        img = img.crop((0, 0, new_height, new_width))
 
         try:
-            print('{} -> {}: {}'.format(file, transformed_path, img.shape[:2]))
-            imageio.imwrite(transformed_path, img, optimize=True)
-            i += 1
+            img.save(str(transformed_path), optimize=True)
         except Exception as e:
-            print('\033[0;31merror writing: {}\033[0m'.format(e))
+            print('\033[0;31merror writing to {}: {}\033[0m'
+                  .format(transformed_path, e), file=sys.stderr)
+
+            continue
+
+        print('{} -> {}: {}'.format(file, transformed_path, img.size))
+        i += 1
 
 
 if __name__ == '__main__':
