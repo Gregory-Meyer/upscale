@@ -33,9 +33,9 @@
 
 import pathlib
 
-import numpy as np
 import PIL
 import skimage.util as util
+import torch
 import torch.utils.data as data
 import torchvision.transforms.functional as F
 
@@ -45,19 +45,69 @@ class ImagenetDataset(data.Dataset):
         super(ImagenetDataset, self).__init__()
 
         self.image_paths = list(pathlib.Path(folder).iterdir())
+        self._calculate_normalization_constants()
 
     def __len__(self):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
+        img = self._get_image(idx)
+        downsampled = ImagenetDataset._downsample(img)
+
+        return (self._normalize(downsampled), ImagenetDataset._to_tensor(img))
+
+    def _get_image(self, idx):
         path = self.image_paths[idx]
 
-        img = PIL.Image.open(str(path.resolve()))
+        return PIL.Image.open(str(path.resolve()))
 
-        downsampled_size = (img.size[0] // 2, img.size[1] // 2)
-        downsampled = img.resize(downsampled_size, PIL.Image.LANCZOS)
+    def _calculate_normalization_constants(self):
+        self.means, num_pixels = self._calculate_image_mean_and_pixel_count()
+        self.stds = self._calculate_image_std(num_pixels)
 
-        img = F.to_tensor(util.img_as_float32(np.array(img)))
-        downscaled = F.to_tensor(util.img_as_float32(np.array(downsampled)))
+    def _calculate_image_mean_and_pixel_count(self):
+        num_pixels = 0
+        means = torch.zeros(3, dtype=torch.float64)
 
-        return (downscaled, img)
+        for img in self._get_tensors_iter():
+            means += torch.sum(img, (1, 2))
+            num_pixels += torch.numel(img[0, :, :])
+
+        means /= float(num_pixels)
+
+        return means, num_pixels
+
+    def _calculate_image_std(self, num_pixels):
+        variances = torch.zeros(3, dtype=torch.float64)
+
+        for img in self._get_tensors_iter():
+            variances += torch.sum(torch.pow(img - self.means, 2))
+
+        variances /= float(num_pixels - 1)
+        stds = torch.sqrt(variances)
+
+        return stds
+
+    def _get_images_iter(self):
+        return (PIL.Image.open(str(p.resolve())) for p in self.image_paths)
+
+    def _get_tensors_iter(self):
+        return (ImagenetDataset._to_f64_tensor(img)
+                for img in self.get_images_iter())
+
+    def _downsample(img):
+        return img.resize((img.width // 2, img.height // 2), PIL.Image.LANCZOS)
+
+    def _normalize(self, img):
+        as_tensor = ImagenetDataset._to_tensor(img)
+
+        as_tensor -= self.means
+        as_tensor /= self.stds
+
+        return as_tensor
+
+    def _to_tensor(img):
+        return F.to_tensor(util.img_as_float32(img))
+
+    def _to_f64_tensor(img):
+        return F.to_tensor(util.img_as_float64(img))
