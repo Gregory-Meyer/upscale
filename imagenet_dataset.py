@@ -38,6 +38,7 @@ import skimage.util as util
 import torch
 import torch.utils.data as data
 import torchvision.transforms.functional as F
+import tqdm
 
 
 class ImagenetDataset(data.Dataset):
@@ -45,7 +46,20 @@ class ImagenetDataset(data.Dataset):
         super(ImagenetDataset, self).__init__()
 
         self.image_paths = list(pathlib.Path(folder).iterdir())
-        self._calculate_normalization_constants()
+
+        try:
+            self.means, self.stds, num_images = torch.load('dataset.tar')
+
+            if num_images != len(self.image_paths):
+                raise Exception('number of images doesn\'t match')
+
+            return
+        except Exception as e:
+            print('couldn\'t load normalization constants: {}'.format(e))
+
+        self.means, self.stds = self._get_normalization_constants()
+        torch.save((self.means, self.stds, len(self.image_paths)),
+                   'dataset.tar')
 
     def __len__(self):
         return len(self.image_paths)
@@ -61,15 +75,18 @@ class ImagenetDataset(data.Dataset):
 
         return PIL.Image.open(str(path.resolve()))
 
-    def _calculate_normalization_constants(self):
-        self.means, num_pixels = self._calculate_image_mean_and_pixel_count()
-        self.stds = self._calculate_image_std(num_pixels)
+    def _get_normalization_constants(self):
+        means, num_pixels = self._get_channel_means_and_pixel_count()
+        stds = self._get_channel_stds(means, num_pixels)
 
-    def _calculate_image_mean_and_pixel_count(self):
+        return means, stds
+
+    def _get_channel_means_and_pixel_count(self):
         num_pixels = 0
         means = torch.zeros(3, dtype=torch.float64)
 
-        for img in self._get_tensors_iter():
+        print('calculating channel means')
+        for img in tqdm.tqdm(self._get_tensors_iter()):
             means += torch.sum(img, (1, 2))
             num_pixels += torch.numel(img[0, :, :])
 
@@ -77,11 +94,13 @@ class ImagenetDataset(data.Dataset):
 
         return means, num_pixels
 
-    def _calculate_image_std(self, num_pixels):
+    def _get_channel_stds(self, means, num_pixels):
         variances = torch.zeros(3, dtype=torch.float64)
+        means = torch.reshape(means, (3, 1, 1))
 
-        for img in self._get_tensors_iter():
-            variances += torch.sum(torch.pow(img - self.means, 2))
+        print('calculating channel stds')
+        for img in tqdm.tqdm(self._get_tensors_iter()):
+            variances += torch.sum(torch.pow(img - means, 2), (1, 2))
 
         variances /= float(num_pixels - 1)
         stds = torch.sqrt(variances)
@@ -93,7 +112,7 @@ class ImagenetDataset(data.Dataset):
 
     def _get_tensors_iter(self):
         return (ImagenetDataset._to_f64_tensor(img)
-                for img in self.get_images_iter())
+                for img in self._get_images_iter())
 
     def _downsample(img):
         return img.resize((img.width // 2, img.height // 2), PIL.Image.LANCZOS)
