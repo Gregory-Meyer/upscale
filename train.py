@@ -33,7 +33,6 @@
 
 import itertools
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.init as init
@@ -44,6 +43,11 @@ import tqdm
 
 import imagenet_dataset
 import upscale_module
+
+
+device = torch.device('cuda')
+dtype = torch.float32
+torch.backends.cudnn.enabled = True
 
 
 def load_urls(path, num_urls):
@@ -70,9 +74,13 @@ def init_weights(m):
 
 def train_epoch(model, train_loader, optimizer, criterion):
     for X, y in tqdm.tqdm(train_loader):
+        X = X.to(device, dtype)
+        y = y.to(device, dtype)
+
         optimizer.zero_grad()
 
-        y_hat = model(X).to(y)
+        y_hat = model(X)
+
         loss = criterion(y_hat, y)
         loss.backward()
         optimizer.step()
@@ -80,21 +88,22 @@ def train_epoch(model, train_loader, optimizer, criterion):
 
 def evaluate_epoch(model, val_loader, criterion):
     with torch.no_grad():
-        running_loss = np.empty(len(val_loader), dtype=np.double)
+        running_loss = 0.0
 
-        for i, (X, y) in enumerate(tqdm.tqdm(val_loader)):
-            y_hat = model(X).to(y)
-            running_loss[i] = criterion(y_hat, y).item()
+        for X, y in tqdm.tqdm(val_loader):
+            X = X.to(device, dtype)
+            y = y.to(device, dtype)
 
-    return np.mean(running_loss)
+            y_hat = model(X)
+
+            running_loss += criterion(y_hat, y).item()
+
+    average_loss = running_loss / float(len(val_loader))
+
+    return average_loss
 
 
 def main():
-    device = torch.device('cuda')
-    dtype = torch.float
-
-    print('loading images')
-
     dataset = imagenet_dataset.ImagenetDataset('./processed/')
     num_samples = len(dataset)
     num_train = num_samples * 4 // 5
@@ -115,7 +124,7 @@ def main():
     start_epoch = 0
 
     try:
-        checkpoint = torch.load('model.tar')
+        checkpoint = torch.load('model.tar', map_location=device)
         model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         scheduler.load_state_dict(checkpoint['scheduler'])
@@ -124,11 +133,8 @@ def main():
         print('restored model from epoch {}'.format(start_epoch))
     except Exception as e:
         print('couldn\'t restore model: {}'.format(e))
-        pass
 
-    model = model.to(device, dtype)
-
-    for epoch in range(start_epoch, 30):
+    for epoch in range(start_epoch, 100):
         print('evaluating epoch {}'.format(epoch))
         loss = evaluate_epoch(model, val_loader, criterion)
         scheduler.step(loss)
