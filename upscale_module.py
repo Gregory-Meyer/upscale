@@ -31,8 +31,6 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-import itertools
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -52,8 +50,6 @@ class Bottleneck(nn.Module):
             self.channel_matcher = lambda x: x
 
     def forward(self, x):
-        x = x.to(self.conv1.weight)
-
         z = F.leaky_relu(self.conv1(x))
         z = F.leaky_relu(self.conv2(z))
         z = self.conv3(z)
@@ -62,32 +58,30 @@ class Bottleneck(nn.Module):
 
 
 class UpscaleModule(nn.Module):
-    def __init__(self, depths=[8, 16, 32, 64], C=2):
+    def __init__(self, depths=[64, 256, 256, 256], C=32):
         super(UpscaleModule, self).__init__()
 
-        assert(len(depths) >= 1)
+        assert(len(depths) >= 2)
 
-        self.input = nn.Conv2d(3, depths[0] // 2, 7, padding=3)
+        self.input1 = nn.Conv2d(3, depths[0], 7, padding=3)
+        self.input2 = nn.Conv2d(depths[0], depths[0], 3, padding=1)
 
-        self.conv = nn.ModuleList(itertools.chain(
-            [Bottleneck(depths[0] // 2, depths[0], C=C)],
-            (Bottleneck(depths[i - 1], depths[i], C=C)
-             for i in range(1, len(depths)))
-        ))
+        self.conv = nn.ModuleList(Bottleneck(depths[i - 1], depths[i], C=C)
+                                  for i in range(1, len(depths)))
+
+        self.output = nn.Conv2d(depths[-1], 12, 3, padding=1)
 
         self.shuffle = nn.PixelShuffle(2)
 
-        self.output = nn.Conv2d(depths[-1] // 4, 3, 3, padding=1)
-
     def forward(self, x):
-        x = x.to(self.output.weight)
-        x = F.leaky_relu(self.input(x))
+        x = F.leaky_relu(self.input1(x))
+        x = F.leaky_relu(self.input2(x))
 
         for z in self.conv:
             x = z(x)
 
+        x = self.output(x)
         x = self.shuffle(x)
-
-        h = torch.tanh(self.output(x))  # in range [-1, 1]
+        h = torch.tanh(x)  # in range [-1, 1]
 
         return h / 2.0 + 0.5  # transform to range [0, 1]
