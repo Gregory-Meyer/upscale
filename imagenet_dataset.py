@@ -113,18 +113,10 @@ class ImagenetDataset(data.Dataset):
         new_size = (img.height // 2, img.width // 2)
         decimated = F.resize(img, new_size, PIL.Image.LANCZOS)
 
-        tensor = ImagenetDataset._pil_to_f32(img)
-        decimated_tensor = ImagenetDataset._pil_to_f32(decimated)
+        tensor = F.to_tensor(img)
+        decimated_tensor = F.to_tensor(decimated)
 
         return tensor, decimated_tensor
 
     def _open_f32_tensor(path):
-        img = PIL.Image.open(path)
-
-        return ImagenetDataset._pil_to_f32(img)
-
-    def _pil_to_f32(img):
-        tensor = F.to_tensor(img).to(torch.float32)
-        tensor /= 255.0
-
-        return tensor
+        return F.to_tensor(PIL.Image.open(path))
