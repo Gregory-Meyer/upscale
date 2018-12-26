@@ -45,35 +45,35 @@ class ImagenetDataset(data.Dataset):
     def __init__(self, folder):
         super(ImagenetDataset, self).__init__()
 
-        self.image_paths = list(pathlib.Path(folder).iterdir())
+        print('loading image paths')
+        self.paths = list(tqdm.tqdm(filter(lambda p: p.is_file(),
+                                           pathlib.Path(folder).iterdir())))
+        self.paths.sort(key=lambda p: p.stem)
 
         try:
-            self.means, self.stds, num_images = torch.load('dataset.tar')
+            self.means, self.stds, num_images = \
+                torch.load('dataset.tar', map_location=torch.device('cpu'))
 
-            if num_images != len(self.image_paths):
+            if num_images != len(self.paths):
                 raise Exception('number of images doesn\'t match')
-
-            return
         except Exception as e:
             print('couldn\'t load normalization constants: {}'.format(e))
 
-        self.means, self.stds = self._get_normalization_constants()
-        torch.save((self.means, self.stds, len(self.image_paths)),
-                   'dataset.tar')
+            self.means, self.stds = self._get_normalization_constants()
+
+        torch.save((self.means, self.stds, len(self.paths)), 'dataset.tar')
 
     def __len__(self):
-        return len(self.image_paths)
+        return len(self.paths)
 
     def __getitem__(self, idx):
-        img = self._get_image(idx)
-        downsampled = ImagenetDataset._downsample(img)
+        img = PIL.Image.open(self.paths[idx])
 
-        return (self._normalize(downsampled), ImagenetDataset._to_tensor(img))
+        tensor, decimated = ImagenetDataset._decimate_and_tensorify(img)
+        decimated -= self.means
+        decimated /= self.stds
 
-    def _get_image(self, idx):
-        path = self.image_paths[idx]
-
-        return PIL.Image.open(str(path.resolve()))
+        return decimated, tensor
 
     def _get_normalization_constants(self):
         means, num_pixels = self._get_channel_means_and_pixel_count()
@@ -83,50 +83,48 @@ class ImagenetDataset(data.Dataset):
 
     def _get_channel_means_and_pixel_count(self):
         num_pixels = 0
-        means = torch.zeros(3, dtype=torch.float64)
+        means = torch.zeros((3, 1, 1), dtype=torch.float64)
 
         print('calculating channel means')
-        for img in tqdm.tqdm(self._get_tensors_iter()):
-            means += torch.sum(img, (1, 2))
+        for img in map(ImagenetDataset._open_f32_tensor,
+                       tqdm.tqdm(self.paths)):
+            means += torch.sum(img, (1, 2), keepdim=True).to(torch.float64)
             num_pixels += torch.numel(img[0, :, :])
 
         means /= float(num_pixels)
 
-        return means, num_pixels
+        return means.to(torch.float32), num_pixels
 
     def _get_channel_stds(self, means, num_pixels):
-        variances = torch.zeros(3, dtype=torch.float64)
-        means = torch.reshape(means, (3, 1, 1))
+        variances = torch.zeros((3, 1, 1), dtype=torch.float64)
 
         print('calculating channel stds')
-        for img in tqdm.tqdm(self._get_tensors_iter()):
-            variances += torch.sum(torch.pow(img - means, 2), (1, 2))
+        for img in map(ImagenetDataset._open_f32_tensor,
+                       tqdm.tqdm(self.paths)):
+            variances += torch.sum(torch.pow(img - means, 2), (1, 2),
+                                   keepdim=True).to(torch.float64)
 
         variances /= float(num_pixels - 1)
         stds = torch.sqrt(variances)
 
-        return stds
+        return stds.to(torch.float32)
 
-    def _get_images_iter(self):
-        return (PIL.Image.open(str(p.resolve())) for p in self.image_paths)
+    def _decimate_and_tensorify(img):
+        new_size = (img.height // 2, img.width // 2)
+        decimated = F.resize(img, new_size, PIL.Image.LANCZOS)
 
-    def _get_tensors_iter(self):
-        return (ImagenetDataset._to_f64_tensor(img)
-                for img in self._get_images_iter())
+        tensor = ImagenetDataset._pil_to_f32(img)
+        decimated_tensor = ImagenetDataset._pil_to_f32(decimated)
 
-    def _downsample(img):
-        return img.resize((img.width // 2, img.height // 2), PIL.Image.LANCZOS)
+        return tensor, decimated_tensor
 
-    def _normalize(self, img):
-        as_tensor = ImagenetDataset._to_tensor(img)
+    def _open_f32_tensor(path):
+        img = PIL.Image.open(path)
 
-        as_tensor -= self.means
-        as_tensor /= self.stds
+        return ImagenetDataset._pil_to_f32(img)
 
-        return as_tensor
+    def _pil_to_f32(img):
+        tensor = F.to_tensor(img).to(torch.float32)
+        tensor /= 255.0
 
-    def _to_tensor(img):
-        return F.to_tensor(util.img_as_float32(img))
-
-    def _to_f64_tensor(img):
-        return F.to_tensor(util.img_as_float64(img))
+        return tensor
