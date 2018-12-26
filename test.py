@@ -33,9 +33,7 @@
 
 import sys
 
-import imageio
-import numpy as np
-import skimage
+import PIL
 import torch
 import torchvision.transforms.functional as F
 
@@ -49,19 +47,24 @@ def main():
     device = torch.device('cpu')
     dtype = torch.float
 
-    model = upscale_module.UpscaleModule()
-    checkpoint = torch.load('model.tar')
+    model = upscale_module.UpscaleModule().to(device, dtype)
+    checkpoint = torch.load('model.tar', map_location=device)
     model.load_state_dict(checkpoint['model'])
-    model = model.to(device, dtype)
+
+    means, stds, _ = torch.load('dataset.tar', map_location=device)
+    means = means.to(dtype)
+    stds = stds.to(dtype)
 
     with torch.no_grad():
-        X = F.to_tensor(skimage.img_as_float32(imageio.imread(sys.argv[1]))) \
-            .to(device, dtype)
+        X = F.to_tensor(PIL.image.open(sys.argv[1])).to(device, dtype)
+        X -= means
+        X /= stds
+
         C, H, W = X.shape
         X = X.reshape(1, C, H, W)
-        y = np.array(F.to_pil_image(model(X)[0, :, :, :]))
+        y = F.to_pil_image(model(X)[0, :, :, :])
 
-        imageio.imwrite('output.png', y, optimize=True)
+        y.save('output.png', y, optimize=True)
 
 
 if __name__ == '__main__':
