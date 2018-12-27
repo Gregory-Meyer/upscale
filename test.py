@@ -56,7 +56,7 @@ def main():
     stds = stds.to(dtype)
 
     with torch.no_grad():
-        X = F.to_tensor(PIL.image.open(sys.argv[1])).to(device, dtype)
+        X = F.to_tensor(PIL.Image.open(sys.argv[1])).to(device, dtype)
         X -= means
         X /= stds
 
@@ -64,7 +64,7 @@ def main():
         X = X.reshape(1, C, H, W)
         y = F.to_pil_image(model(X)[0, :, :, :])
 
-        y.save('output.png', y, optimize=True)
+        y.save('output.png', optimize=True)
 
 
 if __name__ == '__main__':
