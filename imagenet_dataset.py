@@ -60,8 +60,7 @@ class ImagenetDataset(data.Dataset):
             print('couldn\'t load normalization constants: {}'.format(e))
 
             self.means, self.stds = self._get_normalization_constants()
-
-        torch.save((self.means, self.stds, len(self.paths)), 'dataset.tar')
+            torch.save((self.means, self.stds, len(self.paths)), 'dataset.tar')
 
     def __len__(self):
         return len(self.paths)
