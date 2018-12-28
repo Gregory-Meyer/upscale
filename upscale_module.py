@@ -50,11 +50,11 @@ class Bottleneck(nn.Module):
             self.channel_matcher = lambda x: x
 
     def forward(self, x):
-        z = F.leaky_relu(self.conv1(x))
-        z = F.leaky_relu(self.conv2(z))
+        z = F.leaky_relu(self.conv1(x), inplace=True)
+        z = F.leaky_relu(self.conv2(z), inplace=True)
         z = self.conv3(z)
 
-        return F.leaky_relu(z + self.channel_matcher(x))
+        return F.leaky_relu(z + self.channel_matcher(x), inplace=True)
 
 
 class UpscaleModule(nn.Module):
@@ -69,19 +69,16 @@ class UpscaleModule(nn.Module):
         self.conv = nn.ModuleList(Bottleneck(depths[i - 1], depths[i], C=C)
                                   for i in range(1, len(depths)))
 
-        self.output = nn.Conv2d(depths[-1], 12, 3, padding=1)
-
-        self.shuffle = nn.PixelShuffle(2)
+        # directly upscale to rgb output
+        self.output = nn.ConvTranspose2d(depths[-1], 3, 3, 2, 1, 1)
 
     def forward(self, x):
-        x = F.leaky_relu(self.input1(x))
-        x = F.leaky_relu(self.input2(x))
+        x = F.leaky_relu(self.input1(x), inplace=True)
+        x = F.leaky_relu(self.input2(x), inplace=True)
 
         for z in self.conv:
             x = z(x)
 
-        x = self.output(x)
-        x = self.shuffle(x)
-        h = torch.tanh(x)  # in range [-1, 1]
+        x = torch.tanh(self.output(x), out=x)  # in range [-1, 1]
 
-        return h / 2.0 + 0.5  # transform to range [0, 1]
+        return x / 2.0 + 0.5  # transform to range [0, 1]
