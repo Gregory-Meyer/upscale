@@ -79,6 +79,6 @@ class UpscaleModule(nn.Module):
         for z in self.conv:
             x = z(x)
 
-        x = torch.tanh(self.output(x), out=x)  # in range [-1, 1]
+        x = torch.tanh(self.output(x))  # in range [-1, 1]
 
         return x / 2.0 + 0.5  # transform to range [0, 1]
