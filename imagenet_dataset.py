@@ -32,8 +32,6 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 import functools
-import itertools
-import math
 import pathlib
 
 import PIL
@@ -43,126 +41,117 @@ import torchvision.transforms.functional as F
 import tqdm
 
 
-def _grouper(iterable, n, fillvalue=None):
-    "Collect data into fixed-length chunks or blocks"
-    # grouper('ABCDEFG', 3, 'x') --> ABC DEF Gxx"
-    args = [iter(iterable)] * n
-
-    return itertools.zip_longest(*args, fillvalue=fillvalue)
-
-
 class ImagenetDataset(data.Dataset):
-    def __init__(self, folder, examples_per_file=32, files_to_cache=16):
+    def __init__(self, folder):
         super(ImagenetDataset, self).__init__()
 
-        self.group_size = examples_per_file
-
-        print('loading image paths')
-        paths = list(tqdm.tqdm(filter(lambda p: p.is_file(),
-                                      pathlib.Path(folder).iterdir())))
-        paths.sort(key=lambda p: p.stem)
-        self.num_examples = len(paths)
-
-        try:
-            self.means, self.stds, num_images = \
-                torch.load('dataset.tar', map_location=torch.device('cpu'))
-
-            if num_images != self.num_examples:
-                raise Exception('number of images doesn\'t match')
-        except Exception as e:
-            print('couldn\'t load normalization constants: {}'.format(e))
-
-            self.means, self.stds = self._get_normalization_constants(paths)
-            torch.save((self.means, self.stds, self.num_examples),
-                       'dataset.tar')
-
-        print('caching and serializing')
-        pathlib.Path('pickled').mkdir(parents=True, exist_ok=True)
-        self.paths = self._serialize_all(paths)
-
-        @functools.lru_cache(max_size=files_to_cache)
-        def _get_line(idx):
-            return torch.load(self.paths[idx])
-
-        self._get_line = _get_line
+        self._paths = _load_paths(folder)
+        self._means, self._stds = \
+            _load_or_get_normalization_constants(self._paths)
 
     def __len__(self):
-        return self.num_examples
+        return len(self._paths)
 
     def __getitem__(self, idx):
-        if (idx < 0):
-            idx += self.num_examples
+        return _load_and_decimate(self._means, self._stds, self._paths[idx])
 
-        line = self._get_line(idx // self.examples_per_file)
 
-        return line[idx % self.examples_per_file]
+def _load_paths(folder):
+    print('loading image paths')
 
-    def _serialize_all(self, paths):
-        groups_iter = enumerate(_grouper(tqdm.tqdm(paths), self.group_size))
-        serialized_paths = list(map(lambda ig: self._serialize_group(*ig),
-                                    groups_iter))
+    paths = list(tqdm.tqdm(filter(lambda p: p.is_file(),
+                                  pathlib.Path(folder).iterdir())))
+    paths.sort(key=lambda p: p.stem)
 
-        return serialized_paths
+    return paths
 
-    def _serialize_group(self, idx, paths_group):
-        to_serialize = list(map(lambda p: self._load_and_decimate(p),
-                                paths_group))
 
-        filename = 'pickled/{}.tar'.format(idx)
-        torch.save(to_serialize, filename)
+def _load_or_get_normalization_constants(paths, constants_path='dataset.tar'):
+    num_examples = len(paths)
 
-        return filename
+    try:
+        print('loading normalization constants')
+        means, stds, num_images = torch.load(constants_path)
 
-    def _load_and_decimate(self, img_path):
-        img = PIL.Image.open(img_path)
+        if num_images != num_examples:
+            raise Exception('number of images doesn\'t match')
+    except Exception as e:
+        print('couldn\'t load normalization constants: {}'.format(e))
+        print('calculating normalization constants')
 
-        tensor, decimated = \
-            ImagenetDataset._decimate_and_tensorify(img)
-        decimated -= self.means
-        decimated /= self.stds
+        means, stds = _channelwise_mean_and_std(paths)
+        torch.save((means, stds, num_examples), constants_path)
 
-        return tensor, decimated
+    return means, stds
 
-    def _get_normalization_constants(self, paths):
-        means, num_pixels = self._get_channel_means_and_pixel_count(paths)
-        stds = self._get_channel_stds(paths, means, num_pixels)
 
-        return means, stds
+def _load_and_decimate(means, stds, img_path):
+    img = PIL.Image.open(img_path)
 
-    def _get_channel_means_and_pixel_count(self, paths):
-        num_pixels = 0
-        means = torch.zeros((3, 1, 1), dtype=torch.float64)
+    tensor, decimated = _decimate_and_tensorify(img)
+    decimated -= means
+    decimated /= stds
 
-        print('calculating channel means')
-        for img in map(ImagenetDataset._open_f32_tensor, tqdm.tqdm(paths)):
-            means += torch.sum(img, (1, 2), keepdim=True).to(torch.float64)
-            num_pixels += torch.numel(img[0, :, :])
+    return decimated, tensor
 
-        means /= float(num_pixels)
 
-        return means.to(torch.float32), num_pixels
+def _decimate_and_tensorify(img):
+    new_size = (img.height // 2, img.width // 2)
+    decimated = F.resize(img, new_size, PIL.Image.LANCZOS)
 
-    def _get_channel_stds(self, paths, means, num_pixels):
-        variances = torch.zeros((3, 1, 1), dtype=torch.float64)
+    tensor = F.to_tensor(img)
+    decimated_tensor = F.to_tensor(decimated)
 
-        print('calculating channel stds')
-        for img in map(ImagenetDataset._open_f32_tensor, tqdm.tqdm(paths)):
-            variances += torch.sum(torch.pow(img - means, 2), (1, 2),
-                                   keepdim=True).to(torch.float64)
+    return tensor, decimated_tensor
 
-        variances /= float(num_pixels - 1)
-        stds = torch.sqrt(variances)
 
-        return stds.to(torch.float32)
+def _channelwise_mean_and_std(img_paths):
+    channel_means, num_pixels = _channelwise_mean_and_pixel_count(img_paths)
+    channel_stds = _channelwise_std(img_paths, channel_means, num_pixels)
 
-    def _decimate_and_tensorify(img):
-        new_size = (img.height // 2, img.width // 2)
-        decimated = F.resize(img, new_size, PIL.Image.LANCZOS)
+    return channel_means, channel_stds
 
-        tensor = F.to_tensor(img)
-        decimated_tensor = F.to_tensor(decimated)
 
-        return tensor, decimated_tensor
+def _channelwise_mean_and_pixel_count(img_paths):
+    imgs = map(_open_as_f64, tqdm.tqdm(img_paths))
+    sum_and_pixel_counts = map(_sum_and_pixel_count, imgs)
 
-    def _open_f32_tensor(path):
-        return F.to_tensor(PIL.Image.open(path))
+    print('calculating channelwise means')
+    channelwise_totals, pixel_count = \
+        functools.reduce(lambda x, y: (x[0] + y[0], x[1] + y[1]),
+                         sum_and_pixel_counts)
+    channelwise_means = channelwise_totals / float(pixel_count)
+
+    return torch.reshape(channelwise_means, (-1, 1, 1)), pixel_count
+
+
+def _channelwise_std(img_paths, channelwise_means, num_pixels):
+    imgs = map(_open_as_f64, tqdm.tqdm(img_paths))
+    differences = map(lambda i: i - channelwise_means, imgs)
+    squared_differences_sum = map(_sum_of_squares, differences)
+
+    print('calculating channelwise standard deviations')
+    channelwise_vars = sum(squared_differences_sum) / float(num_pixels - 1)
+    channelwise_stds = torch.sqrt(channelwise_vars)
+
+    return torch.reshape(channelwise_stds, (-1, 1, 1))
+
+
+def _sum_and_pixel_count(img):
+    C, H, W = img.shape
+
+    return torch.sum(img, (1, 2)), H * W
+
+
+def _sum_of_squares(img):
+    return torch.sum(torch.pow(img, 2), (1, 2))
+
+
+def _open_as_f64(path):
+    return _open_as_f32(path).double()
+
+
+def _open_as_f32(path):
+    img = PIL.Image.open(path)
+
+    return F.to_tensor(img)
