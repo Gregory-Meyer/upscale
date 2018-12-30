@@ -32,6 +32,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 import itertools
+import multiprocessing
 
 import torch
 import torch.nn as nn
@@ -40,6 +41,7 @@ import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
 import torch.utils.data as data
 import tqdm
+
 
 import imagenet_dataset
 import upscale_module
@@ -74,8 +76,8 @@ def init_weights(m):
 
 def train_epoch(model, train_loader, optimizer, criterion):
     for X, y in tqdm.tqdm(train_loader):
-        X = X.to(device, dtype)
-        y = y.to(device, dtype)
+        X = X.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
 
         optimizer.zero_grad()
 
@@ -88,31 +90,34 @@ def train_epoch(model, train_loader, optimizer, criterion):
 
 def evaluate_epoch(model, val_loader, criterion):
     with torch.no_grad():
-        running_loss = 0.0
+        losses = torch.empty(len(val_loader), device=device, dtype=dtype)
 
-        for X, y in tqdm.tqdm(val_loader):
-            X = X.to(device, dtype)
-            y = y.to(device, dtype)
+        for i, (X, y) in enumerate(tqdm.tqdm(val_loader)):
+            X = X.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
 
             y_hat = model(X)
 
-            running_loss += criterion(y_hat, y).item()
+            losses[i] = criterion(y_hat, y)
 
-    average_loss = running_loss / float(len(val_loader))
-
-    return average_loss
+    return torch.mean(losses).item()
 
 
 def main():
+    torch.cuda.is_available()
     dataset = imagenet_dataset.ImagenetDataset('./processed/')
-    num_samples = len(dataset)
-    num_train = num_samples * 4 // 5
+    num_train = len(dataset) * 4 // 5
+    num_val = len(dataset) - num_train
 
-    train_dataset = data.Subset(dataset, range(num_train))
-    val_dataset = data.Subset(dataset, range(num_train, num_samples))
+    train_dataset, val_dataset = \
+        data.random_split(dataset, (num_train, num_val))
 
-    train_loader = data.DataLoader(train_dataset, shuffle=True)
-    val_loader = data.DataLoader(val_dataset)
+    num_workers = multiprocessing.cpu_count() * 5
+    train_loader = data.DataLoader(train_dataset, shuffle=True,
+                                   num_workers=num_workers,
+                                   pin_memory=True)
+    val_loader = data.DataLoader(val_dataset, num_workers=num_workers,
+                                 pin_memory=True)
 
     model = upscale_module.UpscaleModule().to(device, dtype)
     model.apply(init_weights)
