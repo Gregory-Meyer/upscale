@@ -58,7 +58,7 @@ class Bottleneck(nn.Module):
 
 
 class UpscaleModule(nn.Module):
-    def __init__(self, depths=[64, 256, 256, 256], C=32):
+    def __init__(self, depths=[64, 256, 256, 256, 256], C=32):
         super(UpscaleModule, self).__init__()
 
         assert(len(depths) >= 2)
