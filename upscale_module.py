@@ -36,13 +36,31 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class SqueezeExcitation(nn.Module):
+    def __init__(self, d, r=16):
+        super(SqueezeExcitation, self).__init__()
+
+        self.squeezer = nn.Linear(d, d // r)
+        self.expander = nn.Linear(d // r, d)
+
+    def forward(self, x):
+        N, C, H, W = x.shape
+
+        z = torch.mean(x, (2, 3))
+        z = F.leaky_relu(self.squeezer(z))
+        z = torch.sigmoid(self.expander(z))
+
+        return x * torch.reshape(z, (N, C, 1, 1))
+
+
 class Bottleneck(nn.Module):
-    def __init__(self, d_in, d_out, C=32):
+    def __init__(self, d_in, d_out, C=32, r=16):
         super(Bottleneck, self).__init__()
 
         self.conv1 = nn.Conv2d(d_in, d_out // 2, 1)
         self.conv2 = nn.Conv2d(d_out // 2, d_out // 2, 3, padding=1, groups=C)
         self.conv3 = nn.Conv2d(d_out // 2, d_out, 1)
+        self.cse = SqueezeExcitation(d_out, r)
 
         if d_in != d_out:
             self.channel_matcher = nn.Conv2d(d_in, d_out, 1)
@@ -54,11 +72,14 @@ class Bottleneck(nn.Module):
         z = F.leaky_relu(self.conv2(z))
         z = self.conv3(z)
 
+        z = self.cse(z)
+
         return F.leaky_relu(z + self.channel_matcher(x))
 
 
 class UpscaleModule(nn.Module):
-    def __init__(self, depths=[64, 256, 256, 256], C=32):
+    def __init__(self, depths=[64, 256, 256, 256, 256],
+                 C=32):
         super(UpscaleModule, self).__init__()
 
         assert(len(depths) >= 2)
@@ -69,7 +90,7 @@ class UpscaleModule(nn.Module):
         self.conv = nn.ModuleList(Bottleneck(depths[i - 1], depths[i], C=C)
                                   for i in range(1, len(depths)))
 
-        self.output = nn.Conv2d(depths[-1], 12, 3, padding=1)
+        self.output = nn.Conv2d(depths[-1], 12, 7, padding=3)
 
         self.shuffle = nn.PixelShuffle(2)
 
@@ -82,6 +103,5 @@ class UpscaleModule(nn.Module):
 
         x = self.output(x)
         x = self.shuffle(x)
-        h = torch.tanh(x)  # in range [-1, 1]
 
-        return h / 2.0 + 0.5  # transform to range [0, 1]
+        return torch.sigmoid(x)
