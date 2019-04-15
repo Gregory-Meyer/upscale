@@ -131,15 +131,15 @@ def main():
     try:
         checkpoint = torch.load('model.tar', map_location=device)
         model.load_state_dict(checkpoint['model'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        scheduler.load_state_dict(checkpoint['scheduler'])
+        # optimizer.load_state_dict(checkpoint['optimizer'])
+        # scheduler.load_state_dict(checkpoint['scheduler'])
         start_epoch = checkpoint['epoch']
 
         print('restored model from epoch {}'.format(start_epoch))
     except Exception as e:
         print('couldn\'t restore model: {}'.format(e))
 
-    for epoch in range(start_epoch, 100):
+    for epoch in range(start_epoch, 2048):
         print('evaluating epoch {}'.format(epoch))
         loss = evaluate_epoch(model, val_loader, criterion)
         scheduler.step(loss)
